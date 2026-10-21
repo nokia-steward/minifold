@@ -139,7 +139,7 @@ class DblpConnector(Connector):
         Args:
             map_dblp_id (dict): Maps an author full name with his/her DBLP ID.
             map_dblp_name (dict): Maps an author obsolete full name with his/her
-                current full name.
+                current full name or ``None`` if not referenced by DBLP.
             dblp_api_url (str): The URL of the DBLP server.
                 Defaults to :py:data:`DBLP_API_URL`.
             wait_time (datetime.timedelta): Minimal time interval between two
@@ -236,16 +236,22 @@ class DblpConnector(Connector):
         """
         if map_dblp_name:
             s = map_dblp_name.get(s, s)
+            if s is None:
+                return None
         s = to_international_string(s)
         words = s.lower().split()
         try:
             words.remove("")
         except ValueError:
             pass
-        # a-b means that b must follows a
-        # a_b means that both a and b must be found
+        # In the past (http://dblp.uni-trier.de/db/about/author.html):
+        # a-b meant that b must follow a
+        # a_b meant that both a and b must be found
+        # In the past and now:
+        # - and _ looks ignored in a search e.g. q=Marc-Olivier_Buob
+        # - and _ are considered in filters e.g. q=:authors:Marc-Olivier_Buob
+        # In the past and now:
         # $ corresponds to exact match
-        # See: http://dblp.uni-trier.de/db/about/author.html
         ret = "-".join(words) + "$"
         return ret
 
@@ -277,6 +283,7 @@ class DblpConnector(Connector):
     def binary_predicate_to_dblp(self, p: BinaryPredicate, result: dict):
         """
         Converts a minifold predicate to a DBLP predicate.
+        See also `DBLP operators <https://dblp.org/faq/1474589.html>`__.
 
         Args:
             p (BinaryPredicate): A :py:class:`BinaryPredicate` instance.
@@ -340,7 +347,11 @@ class DblpConnector(Connector):
             "issue"
         }:
             return DocType.REPORT
-        elif s in {"phdthesis", "books and theses", "parts in books or collections"}:
+        elif s in {
+            "phdthesis",
+            "books and theses",
+            "parts in books or collections"
+        }:
             return DocType.BOOKS_AND_THESES
         # elif s == "????":
         #     return DocType.HDR
@@ -385,7 +396,8 @@ class DblpConnector(Connector):
             # Fix author names having homonyms are not well-named (e.g
             # "Giovanni Pau 0001" instead of "Giovanni Pau").
             entry["authors"] = [
-                to_canonic_fullname(author).rstrip(" 0123456789") for author in entry["authors"]
+                to_canonic_fullname(author).rstrip(" 0123456789")
+                for author in entry["authors"]
             ]
 
             # Convert DBLP names to our names if needed.
@@ -411,7 +423,12 @@ class DblpConnector(Connector):
         # If the query is not a standard Dblp object, we are pulling a bibliography
         # of a researcher who is identified by query.object (PID or fullname)
         is_bib_query = query.object not in {"publication", "researcher", "conference"}
-        canonic_fullname = to_canonic_fullname(self.get_dblp_name(query.object)).rstrip("$") if is_bib_query else None
+        canonic_fullname = (
+            to_canonic_fullname(
+                self.get_dblp_name(query.object)
+            ).rstrip("$") if is_bib_query
+            else None
+        )
         try:
             raw_entries = results["result"]["hits"]["hit"]
             for raw_entry in raw_entries:
@@ -454,11 +471,95 @@ class DblpConnector(Connector):
         Returns:
             The reshaped entries.
         """
-        return [self.reshape_entry(query, entry) for entry in entries]
+        return [
+            self.reshape_entry(query, entry)
+            for entry in entries
+        ]
+
+    def craft_dblp_query_suffix(self, query: Query) -> str | None:
+        # Requirements imposed to traverse the Anubis firewall enabled by DBLP
+        # It only applies for non-PID queries.
+        # Ack: marcel.r.ackermann@dagstuhl.de
+        # All incoming API requests **must** now contain a "redundant" query
+        # parameter 'app=<app-name>_<version>' in order to identify your calling
+        # application. E.g., your request URLs would look like this:
+        # https://dblp.org/pid/37/885.xml?app=MyTool_0.1
+        from .__init__ import __version__
+        url_options = {"app": f"minifold_{__version__}"}
+
+
+        pid = None
+        object = None
+
+        if query.object == "publication":
+            object = "search/publ"
+        elif query.object == "researcher":
+            object = "search/author"
+        elif query.object == "conference":
+            object = "search/venue"
+        else:
+            if self.map_dblp_id.get(query.object, -1) is None:
+                # Filtered researcher
+                return None
+            pid = self.map_dblp_id.get(query.object)
+            object = "pid" if pid else "search/publ"
+            # For the moment, DBLP only supports XML for pid-based queries.
+            # https://dblp.org/pid/30/1446.xml
+            if pid is None:
+                # https://dblp.org/faq/1474589.html
+                # Here, an object here can be:
+                # - a list of space-separated words (AND search)
+                # - a list of |-separated words (OR SEARCH)
+                fullname = query.object
+                dblp_name = self.get_dblp_name(fullname)
+                url_options |= {"q": dblp_name}
+
+        if object != "pid":
+            # https://dblp.org/faq/How+to+use+the+dblp+search+API.html
+
+            # WHERE
+            # Examples:
+            # q=author:Barbara_Liskov:
+            # q=machine+learning
+            # q=marc-olivier-buob:year:2023
+            # q=author:Marc-Olivier_Buob:year:2023
+            if query.filters:
+                search = {
+                    "prefix": self.get_dblp_name(query.object),
+                    "suffix": ""  # Updated in place by self.binary_predicate_to_dblp
+                }
+                self.binary_predicate_to_dblp(query.filters, search)
+                url_options |= {
+                    "q" : f"{search['prefix']}{search['suffix']}"
+                }
+
+            # OFFSET and LIMIT
+            url_options |= {"h": query.limit if query.limit is not None else 9999}
+            if query.offset:
+                url_options |= {"f": query.offset}
+
+            # Format of the result.
+            url_options |= {"format": self.format}
+
+        page = f"{object}/api" if object != "pid" else f"pid/{pid}.xml"
+
+        # This will result to a suffix like:
+        # | page   | url_options
+        #  publ/api?q=marc-olivier-buob$&h=9999&format=json&app=minifold_0.10.3
+
+        return page + (
+            "?" + "&".join([
+                f"{k}={v}"
+                for (k, v) in url_options.items()
+            ]) if url_options else ""
+        )
+
 
     def query(self, query: Query) -> list:
         """
         Handles an input :py:class:`Query` instance.
+        See also `How to use the dblp search API
+        <https://dblp.org/faq/How+to+use+the+dblp+search+API.html>`__.
 
         Args:
             query (Query): The handled query.
@@ -469,79 +570,12 @@ class DblpConnector(Connector):
         super().query(query)
         entries = list()
         if query.action == ACTION_READ:
-
-            pid = None
-            format = self.format
-            object = ""
-            url_options = list()
-
-            if query.object == "publication":
-                object = "search/publ"
-            elif query.object == "researcher":
-                object = "search/author"
-            elif query.object == "conference":
-                object = "search/venue"
-            else:
-                fullname = query.object
-                pid = self.map_dblp_id.get(fullname)
-                dblp_name = self.get_dblp_name(fullname)
-                object = "pid" if pid else "search/publ"
-                # For the moment, DBLP only supports XML for pid-based queries.
-                # https://dblp.org/pid/30/1446.xml
-                if pid:
-                    format = "xml"
-                else:
-                    url_options.append(dblp_name)
-
-            # Requirements imposed to traverse the Anubis firewall enabled by DBLP
-            # It only applies for non-PID queries.
-            # Ack: marcel.r.ackermann@dagstuhl.de
-            # All incoming API requests **must** now contain a "redundant" query
-            # parameter 'app=<app-name>_<version>' in order to identify your calling
-            # application. E.g., your request URLs would look like this:
-            # https://dblp.org/pid/37/885.xml?app=MyTool_0.1
-            from .__init__ import __version__
-            anubis_option = f"app=minifold_{__version__}"
-
-
-            if object == "pid":
-                page = f"pid/{pid}.{format}"
-            else:
-                # WHERE
-                if query.filters:
-                    search = {
-                        "prefix": self.get_dblp_name(query.object),
-                        "suffix": ""  # Updated in place by self.binary_predicate_to_dblp
-                    }
-                    self.binary_predicate_to_dblp(query.filters, search)
-                    url_options.append("".join([search["prefix"], search["suffix"]]))
-
-                # OFFSET and LIMIT
-                url_options.append(
-                    f"h={query.limit}" if query.limit is not None
-                    else "h=9999"
-                )
-                if query.offset:
-                    url_options.append(f"f={query.offset}")
-
-                # Format of the result.
-                url_options.append(f"format={format}")
-                url_options.append(anubis_option)
-                page = f"{object}/api?q="
-
-                # This will result to queries like:
-                # self.api_url                   | object   | url_options
-                # https://dblp.dagstuhl.de/search/publ/api?q=marc-olivier-buob$&h=9999&format=json&app=minifold_0.10.3
-
-            q_dblp = f"{self.api_url}/{page}"
-            if url_options:
-                Log.debug(f"1) {page=} {q_dblp=} {url_options=}")
-                if not q_dblp.endswith("="):  # e.g., PID queries
-                    q_dblp += "&"
-                Log.debug(f"2) {q_dblp=} {url_options=}")
-                q_dblp += "&".join(url_options)
-                Log.debug(f"3) {q_dblp=}")
-
+            q_dblp_suffix = self.craft_dblp_query_suffix(query)
+            if q_dblp_suffix is None:
+                # Filtered researcher
+                return list()
+            fmt = "xml" if q_dblp_suffix.startswith("pid/") else self.format
+            q_dblp = f"{self.api_url}/{q_dblp_suffix}"
             Log.info("--> DBLP: %s" % q_dblp)
             wait_time = max(
                 0,
@@ -549,7 +583,7 @@ class DblpConnector(Connector):
                     self.wait_time - (datetime.datetime.now() - self.last_query_time)
                 ).total_seconds()
             )
-            Log.info(f"Waiting {wait_time} seconds due to DBLP rate limiting")
+            Log.info(f"Waiting {wait_time:.2f} seconds due to DBLP rate limiting")
             time.sleep(wait_time)
             # http = urllib3.PoolManager(timeout=urllib3.Timeout(connect=1.0, read=2.0))
             # reply = http.request("GET", q_dblp, retries = 5)
@@ -557,14 +591,14 @@ class DblpConnector(Connector):
 
             if reply.status_code == 200:
                 data = reply.content.decode("utf-8")
-                if format == "json":
+                if fmt == "json":
                     try:
                         result = json.loads(data)
                     except JSONDecodeError as e:
                         Log.error(f"Invalid JSON data:\n{data}")
                         raise e
                     entries = self.extract_entries(query, result)
-                elif format == "xml":
+                elif fmt == "xml":
                     data = data.replace("<i>", "")
                     data = data.replace("</i>", "")
                     try:
@@ -606,7 +640,7 @@ class DblpConnector(Connector):
                                 for author in entry[key]
                             ]
                         else:
-                            Log.warning(f"No author found for this DBLP publication:\n{pformat(entry)}")
+                            Log.warning(f"No author found for this DBLP publication:\n{pfmt(entry)}")
 
                         # In XML data, the DBLP base URL is missing
                         url = entry.get("url")
@@ -616,7 +650,7 @@ class DblpConnector(Connector):
 
                     entries = [xml_to_entry(d) for d in result["dblpperson"]["r"]]
                 else:
-                    raise RuntimeError(f"Format not implemented: {self.format}")
+                    raise RuntimeError(f"Format not implemented: '{self.format}'")
             else:
                 raise RuntimeError(f"Cannot get reply {q_dblp}: {reply.status_code=}")
 

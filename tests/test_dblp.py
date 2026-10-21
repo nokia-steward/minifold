@@ -16,21 +16,21 @@ Log.enable_print = True
 CONFERENCES = {"FORTE"}
 
 FULLNAMES = [
-    # "Natalya Rozhnova",   # No trap here
+    "Natalya Rozhnova",   # No trap here
     "Marc-Olivier Buob",  # Composed firstname
-    # "Céline Comte",       # Accent
-    # "François Durand",    # Special characters
+    "Céline Comte",       # Accent
+    "François Durand",    # Special characters
     "Ana Bušić",          # Special characters
 ]
 
 DBLP_MAP_PID = {
     "Bartek Blaszczyszyn": "88/4182",
-    # "Chung Shue (Calvin) Chen": "30/1446",
-    # "Fabien Schneider": "77/2750-1",
-    # "Giovanni Pau": "87/6423",
-    # "Qiong Liu": "NOBODY",
-    # "Shu Li": "66/6852-6",
-    # "Xuan Zeng": "58/5418-2",
+    "Chung Shue (Calvin) Chen": "30/1446",
+    "Fabien Schneider": "77/2750-1",
+    "Giovanni Pau": "87/6423",
+    "Qiong Liu": None,
+    "Shu Li": "66/6852-6",
+    "Xuan Zeng": "58/5418-2",
 }
 
 DBLP = DblpConnector(
@@ -70,7 +70,10 @@ def test_dblp_bibliography_with_pid():
     for fullname in DBLP_MAP_PID.keys():
         try:
             entries = DBLP.query(Query(object=fullname))
-            assert len(entries) > 0
+            assert (
+                len(entries) > 0 if DBLP_MAP_PID[fullname] is not None else
+                len(entries) == 0
+            )
         except (
             requests.exceptions.ReadTimeout,
             requests.exceptions.ConnectTimeout

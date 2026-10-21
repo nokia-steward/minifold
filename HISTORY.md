@@ -37,4 +37,8 @@
 
 ## 0.10.2 (2025-05-27)
 
-* Fixed documentation build (readthedoc)
+* Fixed documentation build (readthedoc).
+
+## 0.10.3 (2026-10-22)
+
+* Updated DBLP connector to cope with Anubis firewall.

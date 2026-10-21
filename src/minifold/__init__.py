@@ -11,7 +11,7 @@ __maintainer__ = "Marc-Olivier Buob"
 __email__ = "marc-olivier.buob@nokia-bell-labs.com"
 __copyright__ = "Copyright (C) 2018, Nokia"
 __license__ = "BSD-3"
-__version__ = '0.10.3'  # Use single quotes for bumpversion (see setup.cfg)
+__version__ = '0.10.4'  # Use single quotes for bumpversion (see setup.cfg)
 
 
 from .binary_predicate import OPERATORS, OPERATORS_TO_STR, BinaryPredicate

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "minifold"
-version = '0.10.3'
+version = '0.10.4'
 description = "Minifold is a Python module able to interact with various data sources (e.g. CSV, LDAP, SQL, twitter, etc.) and to query/combine/aggregate them with database-like operators."
 authors = ["Marc-Olivier Buob <marc-olivier.buob@nokia-bell-labs.com>"]
 license = "BSD-3 license"

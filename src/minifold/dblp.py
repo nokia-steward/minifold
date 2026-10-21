@@ -487,7 +487,6 @@ class DblpConnector(Connector):
         from .__init__ import __version__
         url_options = {"app": f"minifold_{__version__}"}
 
-
         pid = None
         object = None
 
@@ -530,7 +529,7 @@ class DblpConnector(Connector):
                 }
                 self.binary_predicate_to_dblp(query.filters, search)
                 url_options |= {
-                    "q" : f"{search['prefix']}{search['suffix']}"
+                    "q": f"{search['prefix']}{search['suffix']}"
                 }
 
             # OFFSET and LIMIT
@@ -553,7 +552,6 @@ class DblpConnector(Connector):
                 for (k, v) in url_options.items()
             ]) if url_options else ""
         )
-
 
     def query(self, query: Query) -> list:
         """
@@ -640,7 +638,7 @@ class DblpConnector(Connector):
                                 for author in entry[key]
                             ]
                         else:
-                            Log.warning(f"No author found for this DBLP publication:\n{pfmt(entry)}")
+                            Log.warning(f"No author found for this DBLP publication:\n{pformat(entry)}")
 
                         # In XML data, the DBLP base URL is missing
                         url = entry.get("url")
